@@ -1,7 +1,7 @@
 CC=gcc
 CFLAGS=-O2 -Wall -Wextra -std=c11 -fopenmp
 
-TARGETS=race_sum reduction_sum private_test firstprivate_test
+TARGETS=race_sum reduction_sum private_test firstprivate_test schedule_test false_sharing wo_false_sharing
 
 all: $(TARGETS)
 
@@ -15,6 +15,15 @@ private_test: private_test.c
 	$(CC) $(CFLAGS) $< -o $@
 
 firstprivate_test: firstprivate_test.c
+	$(CC) $(CFLAGS) $< -o $@
+
+schedule_test: schedule_test.c
+	$(CC) $(CFLAGS) $< -o $@
+
+false_sharing: false_sharing.c
+	$(CC) $(CFLAGS) $< -o $@
+
+wo_false_sharing: wo_false_sharing.c
 	$(CC) $(CFLAGS) $< -o $@
 
 clean:
