@@ -1,4 +1,3 @@
-// collapse_2d.c
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,17 +37,33 @@ int main(int argc, char *argv[]) {
     double t0 = omp_get_wtime();
 
     if (use_collapse) {
-        #pragma omp parallel for collapse(2)
+        #pragma omp parallel for collapse(2) schedule(static)
         for (int i = 0; i < Nx; i++) {
             for (int j = 0; j < Ny; j++) {
-                A[i * Ny + j] = B[i * Ny + j] + C[i * Ny + j];
+                long long idx = (long long)i * Ny + j;
+                double x = B[idx];
+                double y = C[idx];
+
+                for (int k = 0; k < 20; k++) {
+                    x = x * 1.0000001 + y * 0.9999999;
+                }
+
+                A[idx] = x;
             }
         }
     } else {
-        #pragma omp parallel for
+        #pragma omp parallel for schedule(static)
         for (int i = 0; i < Nx; i++) {
             for (int j = 0; j < Ny; j++) {
-                A[i * Ny + j] = B[i * Ny + j] + C[i * Ny + j];
+                long long idx = (long long)i * Ny + j;
+                double x = B[idx];
+                double y = C[idx];
+
+                for (int k = 0; k < 20; k++) {
+                    x = x * 1.0000001 + y * 0.9999999;
+                }
+
+                A[idx] = x;
             }
         }
     }
@@ -59,8 +74,10 @@ int main(int argc, char *argv[]) {
     for (long long i = 0; i < N; i++) checksum += A[i];
 
     printf("Nx=%d Ny=%d mode=%s threads=%d time=%.6f s checksum=%.6f\n",
-           Nx, Ny, use_collapse ? "collapse(2)" : "no-collapse",
-           omp_get_max_threads(), t1 - t0, checksum);
+           Nx, Ny,
+           use_collapse ? "collapse(2)" : "no-collapse",
+           omp_get_max_threads(),
+           t1 - t0, checksum);
 
     free(A);
     free(B);
