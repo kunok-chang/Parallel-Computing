@@ -10,15 +10,18 @@ static double now_sec(void) {
 }
 
 int main(int argc, char** argv) {
-    long N = 10000000;
-    if (argc > 1) {
-        N = atol(argv[1]);
-    }
+    long N = 1000000;
+    int REPEAT = 1000;
+
+    if (argc > 1) N = atol(argv[1]);
+    if (argc > 2) REPEAT = atoi(argv[2]);
 
     size_t bytes = (size_t)N * sizeof(float);
+
     float* A = (float*)malloc(bytes);
     float* B = (float*)malloc(bytes);
     float* C = (float*)malloc(bytes);
+
     if (!A || !B || !C) {
         fprintf(stderr, "Allocation failed\n");
         free(A); free(B); free(C);
@@ -27,15 +30,27 @@ int main(int argc, char** argv) {
 
     #pragma omp parallel for schedule(static)
     for (long i = 0; i < N; i++) {
-        A[i] = (float)(i % 1000) * 0.5f;
-        B[i] = (float)(i % 1000) * 0.25f;
+        A[i] = 1.0f + (float)(i % 1000) * 0.001f;
+        B[i] = 0.5f + (float)(i % 1000) * 0.002f;
     }
 
     double t0 = now_sec();
+
     #pragma omp parallel for schedule(static)
     for (long i = 0; i < N; i++) {
-        C[i] = A[i] + B[i];
+        float x = A[i];
+        float y = B[i];
+
+        for (int r = 0; r < REPEAT; r++) {
+            x = x * 1.000001f + y * 0.999999f;
+            y = y * 1.000000f - x * 0.000001f;
+            x = x + 0.000001f;
+            y = y - 0.000001f;
+        }
+
+        C[i] = x + y;
     }
+
     double t1 = now_sec();
 
     double checksum = 0.0;
@@ -43,8 +58,8 @@ int main(int argc, char** argv) {
         checksum += C[i];
     }
 
-    printf("[OpenMP] N=%ld threads=%d time=%.6f s checksum=%.6f\n",
-           N, omp_get_max_threads(), t1 - t0, checksum);
+    printf("[OpenMP] N=%ld REPEAT=%d threads=%d time=%.6f s checksum=%.6f\n",
+           N, REPEAT, omp_get_max_threads(), t1 - t0, checksum);
 
     free(A);
     free(B);
