@@ -1,7 +1,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <omp.h>
+#include <time.h>
+
+static double now_sec(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec + ts.tv_nsec * 1e-9;
+}
 
 static void initialize(float* a, int Nx, int Ny) {
     for (int i = 0; i < Nx; i++) {
@@ -35,32 +41,24 @@ int main(int argc, char** argv) {
     initialize(oldA, Nx, Ny);
     memcpy(newA, oldA, bytes);
 
-    double t0 = omp_get_wtime();
-    #pragma omp parallel
-    {
-        for (int step = 0; step < iters; step++) {
-            #pragma omp for schedule(static)
-            for (int i = 1; i < Nx - 1; i++) {
-                size_t row = (size_t)i * Ny;
-                size_t row_up = row - Ny;
-                size_t row_dn = row + Ny;
-                for (int j = 1; j < Ny - 1; j++) {
-                    newA[row + j] = 0.2f * (
-                        oldA[row + j] +
-                        oldA[row_up + j] + oldA[row_dn + j] +
-                        oldA[row + j - 1] + oldA[row + j + 1]);
-                }
-            }
-
-            #pragma omp single
-            {
-                float* tmp = oldA;
-                oldA = newA;
-                newA = tmp;
+    double t0 = now_sec();
+    for (int step = 0; step < iters; step++) {
+        for (int i = 1; i < Nx - 1; i++) {
+            size_t row = (size_t)i * Ny;
+            size_t row_up = row - Ny;
+            size_t row_dn = row + Ny;
+            for (int j = 1; j < Ny - 1; j++) {
+                newA[row + j] = 0.2f * (
+                    oldA[row + j] +
+                    oldA[row_up + j] + oldA[row_dn + j] +
+                    oldA[row + j - 1] + oldA[row + j + 1]);
             }
         }
+        float* tmp = oldA;
+        oldA = newA;
+        newA = tmp;
     }
-    double t1 = omp_get_wtime();
+    double t1 = now_sec();
 
     double checksum = 0.0;
     size_t stride = (n / 32 > 0) ? (n / 32) : 1;
@@ -68,8 +66,8 @@ int main(int argc, char** argv) {
         checksum += oldA[i];
     }
 
-    printf("[openmp stencil] Nx=%d Ny=%d iters=%d threads=%d time=%.6f s checksum=%.6f\n",
-           Nx, Ny, iters, omp_get_max_threads(), t1 - t0, checksum);
+    printf("[serial stencil] Nx=%d Ny=%d iters=%d time=%.6f s checksum=%.6f\n",
+           Nx, Ny, iters, t1 - t0, checksum);
 
     free(oldA);
     free(newA);

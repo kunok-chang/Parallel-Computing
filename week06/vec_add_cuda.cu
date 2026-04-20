@@ -2,110 +2,91 @@
 #include <stdlib.h>
 #include <cuda_runtime.h>
 
-__global__ void heavy_compute_kernel(const float* A, const float* B, float* C, long N, int REPEAT) {
+#define CUDA_CHECK(call) do { \
+    cudaError_t err = (call); \
+    if (err != cudaSuccess) { \
+        fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err)); \
+        exit(1); \
+    } \
+} while (0)
+
+__global__ void vec_add_kernel(const float* A, const float* B, float* C, long N) {
     long idx = (long)blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < N) {
-        float x = A[idx];
-        float y = B[idx];
-
-        #pragma unroll 4
-        for (int r = 0; r < REPEAT; r++) {
-            x = x * 1.000001f + y * 0.999999f;
-            y = y * 1.000000f - x * 0.000001f;
-            x = x + 0.000001f;
-            y = y - 0.000001f;
-        }
-
-        C[idx] = x + y;
-    }
-}
-
-static void check_cuda(cudaError_t err, const char* msg) {
-    if (err != cudaSuccess) {
-        fprintf(stderr, "CUDA error at %s: %s\n", msg, cudaGetErrorString(err));
-        exit(1);
+        C[idx] = A[idx] + B[idx];
     }
 }
 
 int main(int argc, char** argv) {
-    long N = 1000000;
-    int REPEAT = 1000;
-
+    long N = 10000000;
     if (argc > 1) N = atol(argv[1]);
-    if (argc > 2) REPEAT = atoi(argv[2]);
 
     size_t bytes = (size_t)N * sizeof(float);
-
     float* A = (float*)malloc(bytes);
     float* B = (float*)malloc(bytes);
     float* C = (float*)malloc(bytes);
+    float *d_A = NULL, *d_B = NULL, *d_C = NULL;
 
     if (!A || !B || !C) {
         fprintf(stderr, "Host allocation failed\n");
-        free(A); free(B); free(C);
+        free(A);
+        free(B);
+        free(C);
         return 1;
     }
 
     for (long i = 0; i < N; i++) {
-        A[i] = 1.0f + (float)(i % 1000) * 0.001f;
-        B[i] = 0.5f + (float)(i % 1000) * 0.002f;
+        A[i] = 1.0f + 0.001f * (float)(i % 1000);
+        B[i] = 2.0f + 0.002f * (float)(i % 1000);
     }
 
-    float *d_A = NULL, *d_B = NULL, *d_C = NULL;
-    check_cuda(cudaMalloc((void**)&d_A, bytes), "cudaMalloc d_A");
-    check_cuda(cudaMalloc((void**)&d_B, bytes), "cudaMalloc d_B");
-    check_cuda(cudaMalloc((void**)&d_C, bytes), "cudaMalloc d_C");
+    CUDA_CHECK(cudaMalloc((void**)&d_A, bytes));
+    CUDA_CHECK(cudaMalloc((void**)&d_B, bytes));
+    CUDA_CHECK(cudaMalloc((void**)&d_C, bytes));
 
-    cudaEvent_t e_start_total, e_stop_total, e_start_kernel, e_stop_kernel;
-    check_cuda(cudaEventCreate(&e_start_total), "event create total start");
-    check_cuda(cudaEventCreate(&e_stop_total), "event create total stop");
-    check_cuda(cudaEventCreate(&e_start_kernel), "event create kernel start");
-    check_cuda(cudaEventCreate(&e_stop_kernel), "event create kernel stop");
+    cudaEvent_t start_total, stop_total, start_kernel, stop_kernel;
+    CUDA_CHECK(cudaEventCreate(&start_total));
+    CUDA_CHECK(cudaEventCreate(&stop_total));
+    CUDA_CHECK(cudaEventCreate(&start_kernel));
+    CUDA_CHECK(cudaEventCreate(&stop_kernel));
 
-    int blockSize = 256;
-    int gridSize = (int)((N + blockSize - 1) / blockSize);
+    int block = 256;
+    int grid = (int)((N + block - 1) / block);
 
-    check_cuda(cudaEventRecord(e_start_total), "record total start");
+    CUDA_CHECK(cudaEventRecord(start_total));
+    CUDA_CHECK(cudaMemcpy(d_A, A, bytes, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_B, B, bytes, cudaMemcpyHostToDevice));
 
-    check_cuda(cudaMemcpy(d_A, A, bytes, cudaMemcpyHostToDevice), "memcpy A H2D");
-    check_cuda(cudaMemcpy(d_B, B, bytes, cudaMemcpyHostToDevice), "memcpy B H2D");
+    CUDA_CHECK(cudaEventRecord(start_kernel));
+    vec_add_kernel<<<grid, block>>>(d_A, d_B, d_C, N);
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaEventRecord(stop_kernel));
+    CUDA_CHECK(cudaEventSynchronize(stop_kernel));
 
-    check_cuda(cudaEventRecord(e_start_kernel), "record kernel start");
-
-    heavy_compute_kernel<<<gridSize, blockSize>>>(d_A, d_B, d_C, N, REPEAT);
-
-    check_cuda(cudaEventRecord(e_stop_kernel), "record kernel stop");
-    check_cuda(cudaGetLastError(), "kernel launch");
-    check_cuda(cudaEventSynchronize(e_stop_kernel), "sync kernel stop");
-
-    check_cuda(cudaMemcpy(C, d_C, bytes, cudaMemcpyDeviceToHost), "memcpy C D2H");
-
-    check_cuda(cudaEventRecord(e_stop_total), "record total stop");
-    check_cuda(cudaEventSynchronize(e_stop_total), "sync total stop");
+    CUDA_CHECK(cudaMemcpy(C, d_C, bytes, cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaEventRecord(stop_total));
+    CUDA_CHECK(cudaEventSynchronize(stop_total));
 
     float kernel_ms = 0.0f, total_ms = 0.0f;
-    check_cuda(cudaEventElapsedTime(&kernel_ms, e_start_kernel, e_stop_kernel), "elapsed kernel");
-    check_cuda(cudaEventElapsedTime(&total_ms, e_start_total, e_stop_total), "elapsed total");
+    CUDA_CHECK(cudaEventElapsedTime(&kernel_ms, start_kernel, stop_kernel));
+    CUDA_CHECK(cudaEventElapsedTime(&total_ms, start_total, stop_total));
 
     double checksum = 0.0;
-    for (long i = 0; i < N; i += (N / 10 > 0 ? N / 10 : 1)) {
+    long stride = (N / 16 > 0) ? (N / 16) : 1;
+    for (long i = 0; i < N; i += stride) {
         checksum += C[i];
     }
 
-    printf("[CUDA kernel-only] N=%ld REPEAT=%d time=%.6f s checksum=%.6f\n",
-           N, REPEAT, kernel_ms / 1000.0, checksum);
-    printf("[CUDA total]       N=%ld REPEAT=%d time=%.6f s checksum=%.6f\n",
-           N, REPEAT, total_ms / 1000.0, checksum);
+    printf("[cuda vec_add kernel] N=%ld time=%.6f s checksum=%.6f\n", N, kernel_ms / 1000.0, checksum);
+    printf("[cuda vec_add total ] N=%ld time=%.6f s checksum=%.6f\n", N, total_ms / 1000.0, checksum);
 
-    cudaEventDestroy(e_start_total);
-    cudaEventDestroy(e_stop_total);
-    cudaEventDestroy(e_start_kernel);
-    cudaEventDestroy(e_stop_kernel);
-
-    cudaFree(d_A);
-    cudaFree(d_B);
-    cudaFree(d_C);
-
+    CUDA_CHECK(cudaEventDestroy(start_total));
+    CUDA_CHECK(cudaEventDestroy(stop_total));
+    CUDA_CHECK(cudaEventDestroy(start_kernel));
+    CUDA_CHECK(cudaEventDestroy(stop_kernel));
+    CUDA_CHECK(cudaFree(d_A));
+    CUDA_CHECK(cudaFree(d_B));
+    CUDA_CHECK(cudaFree(d_C));
     free(A);
     free(B);
     free(C);

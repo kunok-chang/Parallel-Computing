@@ -1,34 +1,50 @@
-# CUDA Introduction: CPU, OpenMP, and CUDA Comparison
+# CUDA Introduction: simple vec_add + performance-friendly stencil
 
-This repository is designed for the first CUDA class.
-Students can compile and run simple examples, then compare serial CPU, OpenMP, and CUDA performance.
+이 버전은 목적을 두 가지로 분리했습니다.
+
+1. `vec_add_*` 는 **성능보다 구조 비교용**으로 유지
+   - serial / OpenMP / CUDA 문법과 실행 흐름을 처음 비교하는 아주 단순한 벡터 덧셈
+2. `stencil_*` 는 **성능 비교용**으로 구성
+   - 기본적으로 `serial < openmp < cuda`가 나오기 쉽도록 충분히 큰 2D Jacobi stencil 계산으로 구성
 
 ## Files
 
-- `vec_add_cpu.c`: serial CPU vector addition baseline
-- `vec_add_openmp.c`: OpenMP vector addition baseline
-- `vec_add_cuda.cu`: CUDA vector addition
-- `stencil_openmp.c`: OpenMP 2D stencil (FDM-style update)
-- `stencil_cuda.cu`: CUDA 2D stencil
-- `Makefile`: build targets
-- `run_examples.sh`: example run script
+- `vec_add_cpu.c` : serial vector addition
+- `vec_add_openmp.c` : OpenMP vector addition
+- `vec_add_cuda.cu` : CUDA vector addition
+- `stencil_serial.c` : serial 2D stencil
+- `stencil_openmp.c` : OpenMP 2D stencil
+- `stencil_cuda.cu` : CUDA 2D stencil (shared-memory tiled kernel)
+- `Makefile`
+- `run_examples.sh`
 
-## Learning goals
+## Key idea
 
-- Understand host-device workflow in CUDA
-- Compare serial CPU, OpenMP, and CUDA execution
-- Observe that GPU speedup depends on problem size
-- Connect CUDA examples to previous OpenMP/FDM lessons
+### Vector addition
 
-## Requirements
+세 버전 모두 사실상 아래 한 줄입니다.
 
-### For CPU/OpenMP
-- GCC with OpenMP support
+```c
+C[i] = A[i] + B[i];
+```
 
-### For CUDA on WSL
-- WSL2 installed on Windows
-- NVIDIA Windows driver with WSL CUDA support
-- CUDA Toolkit inside Ubuntu
+즉, 여기서는 속도보다
+- serial for loop
+- OpenMP `#pragma omp parallel for`
+- CUDA kernel launch / memcpy
+
+이 세 가지 구조 차이를 보여주는 데 목적이 있습니다.
+
+### Stencil
+
+stencil 코드는 실제 속도 차이가 보이도록 아래처럼 구성했습니다.
+
+- 충분히 큰 기본 문제 크기: `4096 x 4096`
+- 여러 iteration 반복: 기본 `400`
+- serial: 순수 단일 스레드
+- OpenMP: row-wise 정적 분할 + 반복 내부 pointer swap
+- CUDA: shared-memory tiled 5-point stencil
+- stencil 시간은 **핵심 반복 계산 구간** 기준으로 측정
 
 ## Build
 
@@ -36,17 +52,21 @@ Students can compile and run simple examples, then compare serial CPU, OpenMP, a
 make
 ```
 
-If `nvcc` is not installed yet, CPU/OpenMP examples can still be compiled individually:
+- `nvcc`가 있으면 CUDA 타깃까지 같이 빌드됩니다.
+- `nvcc`가 없으면 CPU/OpenMP 타깃만 빌드됩니다.
+
+개별 빌드:
 
 ```bash
 gcc -O3 -march=native vec_add_cpu.c -o vec_add_cpu
 gcc -O3 -march=native -fopenmp vec_add_openmp.c -o vec_add_openmp
+gcc -O3 -march=native stencil_serial.c -o stencil_serial
 gcc -O3 -march=native -fopenmp stencil_openmp.c -o stencil_openmp
 ```
 
 ## Run examples
 
-### Vector addition
+### 1) Simple vector add
 
 ```bash
 ./vec_add_cpu 10000000
@@ -55,43 +75,33 @@ export OMP_NUM_THREADS=8
 ./vec_add_cuda 10000000
 ```
 
-Try larger sizes too:
+### 2) Performance-oriented stencil
+
+권장:
 
 ```bash
-./vec_add_cpu 100000000
-./vec_add_openmp 100000000
-./vec_add_cuda 100000000
-```
-
-### 2D stencil
-
-```bash
+./stencil_serial 4096 4096 400
 export OMP_NUM_THREADS=8
-./stencil_openmp 2048 2048 200
-./stencil_cuda 2048 2048 200
+./stencil_openmp 4096 4096 400
+./stencil_cuda 4096 4096 400
 ```
 
-## What to discuss in class
+더 분명하게 보려면:
 
-### Vector addition
-- CUDA syntax is simple to understand
-- Small problems may not benefit from GPU because copy overhead matters
-- Large problems make GPU parallelism more worthwhile
+```bash
+./stencil_serial 4096 4096 800
+export OMP_NUM_THREADS=8
+./stencil_openmp 4096 4096 800
+./stencil_cuda 4096 4096 800
+```
 
-### 2D stencil
-- This is closer to finite difference workloads
-- OpenMP and CUDA solve the same parallel problem on different hardware
-- Compare total runtime, not only kernel time
+## Expected classroom message
 
-## Suggested report questions
+- `vec_add_*` : “코드 구조 비교용”
+- `stencil_*` : “실제 성능 비교용”
 
-1. Does CUDA always beat OpenMP?
-2. At what problem size does CUDA become advantageous?
-3. Why is total CUDA time different from kernel-only time?
-4. Why is stencil a better bridge example than vector addition?
+즉 수업에서는
+- vector add로 CUDA 기본 문법 소개
+- stencil로 실제 병렬 성능 비교
 
-## Notes
-
-- CUDA timings in these examples report end-to-end GPU time including memory copies.
-- Checksums are printed for quick correctness checks.
-- These are intentionally simple first-week teaching codes, not fully optimized production kernels.
+순서로 설명하면 자연스럽습니다.
