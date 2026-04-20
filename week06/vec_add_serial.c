@@ -1,35 +1,36 @@
 // ============================================================
-// 벡터 덧셈 - OpenMP (멀티 스레드)
-// 핵심: #pragma omp parallel for  한 줄로 루프를 스레드에 분배
+// 벡터 덧셈 - Serial (CPU 단일 스레드)
+// 핵심: C[i] = A[i] + B[i]  를 for loop 으로 순차 실행
 // ============================================================
 #include <stdio.h>
 #include <stdlib.h>
-#include <omp.h>
+#include <time.h>
 
 int main(void) {
-    const int N = 1 << 24;
+    const int N = 1 << 24;  // 16,777,216 개 원소 (~64 MB x3)
 
     float *A = malloc(N * sizeof(float));
     float *B = malloc(N * sizeof(float));
     float *C = malloc(N * sizeof(float));
 
+    // 초기화
     for (int i = 0; i < N; i++) {
         A[i] = 1.0f;
         B[i] = 2.0f;
     }
 
     // ── 핵심 계산 ──────────────────────────────────────────
-    double t0 = omp_get_wtime();
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
 
-    #pragma omp parallel for                 // ← 이 지시어 하나로 병렬화
     for (int i = 0; i < N; i++)
-        C[i] = A[i] + B[i];
+        C[i] = A[i] + B[i];   // ← 이 한 줄이 전부
 
-    double t1 = omp_get_wtime();
+    clock_gettime(CLOCK_MONOTONIC, &t1);
     // ───────────────────────────────────────────────────────
 
-    printf("[openmp]  N=%d  threads=%d  time=%.4f s  C[0]=%.1f\n",
-           N, omp_get_max_threads(), t1 - t0, C[0]);
+    double sec = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) * 1e-9;
+    printf("[serial]  N=%d  time=%.4f s  C[0]=%.1f\n", N, sec, C[0]);
 
     free(A); free(B); free(C);
     return 0;

@@ -1,77 +1,59 @@
+// ============================================================
+// 2D Stencil (5-point Jacobi) - OpenMP
+// 핵심:
+//   - #pragma omp parallel  : 스레드 팀을 한 번만 생성 (반복문 밖)
+//   - #pragma omp for       : 각 step 의 행(i) 분배
+//   - #pragma omp single    : 포인터 스왑은 한 스레드만 수행
+// ============================================================
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <omp.h>
 
-static void initialize(float* a, int Nx, int Ny) {
-    for (int i = 0; i < Nx; i++) {
-        for (int j = 0; j < Ny; j++) {
-            if (i == 0 || j == 0 || i == Nx - 1 || j == Ny - 1) {
-                a[(size_t)i * Ny + j] = 1.0f;
-            } else {
-                a[(size_t)i * Ny + j] = (float)((i + j) & 15) * 0.001f;
-            }
-        }
-    }
+#define NX    2048
+#define NY    2048
+#define ITER  200
+
+static void init(float *a) {
+    for (int i = 0; i < NX; i++)
+        for (int j = 0; j < NY; j++)
+            a[i * NY + j] = (i == 0 || j == 0 || i == NX-1 || j == NY-1)
+                             ? 1.0f : 0.0f;
 }
 
-int main(int argc, char** argv) {
-    int Nx = 4096, Ny = 4096, iters = 400;
-    if (argc > 1) Nx = atoi(argv[1]);
-    if (argc > 2) Ny = atoi(argv[2]);
-    if (argc > 3) iters = atoi(argv[3]);
+int main(void) {
+    float *old = malloc(NX * NY * sizeof(float));
+    float *nw  = malloc(NX * NY * sizeof(float));
 
-    size_t n = (size_t)Nx * Ny;
-    size_t bytes = n * sizeof(float);
-    float* oldA = (float*)malloc(bytes);
-    float* newA = (float*)malloc(bytes);
-    if (!oldA || !newA) {
-        fprintf(stderr, "Allocation failed\n");
-        free(oldA);
-        free(newA);
-        return 1;
-    }
+    init(old);
+    memcpy(nw, old, NX * NY * sizeof(float));
 
-    initialize(oldA, Nx, Ny);
-    memcpy(newA, oldA, bytes);
-
+    // ── 핵심 계산 ──────────────────────────────────────────
     double t0 = omp_get_wtime();
-    #pragma omp parallel
+
+    #pragma omp parallel                    // ← 스레드 팀 생성 (한 번만)
     {
-        for (int step = 0; step < iters; step++) {
-            #pragma omp for schedule(static)
-            for (int i = 1; i < Nx - 1; i++) {
-                size_t row = (size_t)i * Ny;
-                size_t row_up = row - Ny;
-                size_t row_dn = row + Ny;
-                for (int j = 1; j < Ny - 1; j++) {
-                    newA[row + j] = 0.2f * (
-                        oldA[row + j] +
-                        oldA[row_up + j] + oldA[row_dn + j] +
-                        oldA[row + j - 1] + oldA[row + j + 1]);
-                }
-            }
+        for (int step = 0; step < ITER; step++) {
 
-            #pragma omp single
-            {
-                float* tmp = oldA;
-                oldA = newA;
-                newA = tmp;
-            }
-        }
+            #pragma omp for                 // ← 행(i)을 스레드들이 나눠서 처리
+            for (int i = 1; i < NX - 1; i++)
+                for (int j = 1; j < NY - 1; j++)
+                    nw[i*NY+j] = 0.2f * (old[i*NY+j]
+                                + old[(i-1)*NY+j] + old[(i+1)*NY+j]
+                                + old[i*NY+(j-1)] + old[i*NY+(j+1)]);
+
+            #pragma omp single              // ← 스왑은 한 스레드만 (나머지는 대기)
+            { float *tmp = old; old = nw; nw = tmp; }
+
+        }  // implicit barrier here: 모든 스레드가 이 step 끝날 때까지 대기
     }
+
     double t1 = omp_get_wtime();
+    // ───────────────────────────────────────────────────────
 
-    double checksum = 0.0;
-    size_t stride = (n / 32 > 0) ? (n / 32) : 1;
-    for (size_t i = 0; i < n; i += stride) {
-        checksum += oldA[i];
-    }
+    printf("[openmp]  %dx%d  iters=%d  threads=%d  time=%.4f s  center=%.6f\n",
+           NX, NY, ITER, omp_get_max_threads(), t1 - t0, old[(NX/2)*NY + NY/2]);
 
-    printf("[openmp stencil] Nx=%d Ny=%d iters=%d threads=%d time=%.6f s checksum=%.6f\n",
-           Nx, Ny, iters, omp_get_max_threads(), t1 - t0, checksum);
-
-    free(oldA);
-    free(newA);
+    free(old); free(nw);
     return 0;
 }

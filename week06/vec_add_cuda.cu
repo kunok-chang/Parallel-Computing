@@ -1,94 +1,70 @@
+// ============================================================
+// 벡터 덧셈 - CUDA (GPU)
+// 핵심 개념:
+//   1. cudaMalloc   : GPU 메모리 할당
+//   2. cudaMemcpy   : CPU → GPU, GPU → CPU 데이터 전송
+//   3. kernel<<<grid, block>>> : GPU 함수(kernel) 실행
+//   4. 각 thread 가 자신의 인덱스(idx)로 딱 하나의 원소를 처리
+// ============================================================
 #include <stdio.h>
 #include <stdlib.h>
 #include <cuda_runtime.h>
 
-#define CUDA_CHECK(call) do { \
-    cudaError_t err = (call); \
-    if (err != cudaSuccess) { \
-        fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err)); \
-        exit(1); \
-    } \
-} while (0)
+// GPU에서 실행되는 함수 = "kernel"
+// __global__ : CPU가 호출하고, GPU에서 실행됨
+__global__ void vec_add_kernel(const float *A, const float *B, float *C, int N) {
+    // 이 thread 가 담당할 원소 인덱스
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
-__global__ void vec_add_kernel(const float* A, const float* B, float* C, long N) {
-    long idx = (long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < N) {
+    if (idx < N)          // 배열 범위 초과 방지
         C[idx] = A[idx] + B[idx];
-    }
 }
 
-int main(int argc, char** argv) {
-    long N = 10000000;
-    if (argc > 1) N = atol(argv[1]);
+int main(void) {
+    const int N = 1 << 24;
+    size_t bytes = N * sizeof(float);
 
-    size_t bytes = (size_t)N * sizeof(float);
-    float* A = (float*)malloc(bytes);
-    float* B = (float*)malloc(bytes);
-    float* C = (float*)malloc(bytes);
-    float *d_A = NULL, *d_B = NULL, *d_C = NULL;
+    // ── CPU(host) 메모리 ────────────────────────────────────
+    float *h_A = (float*)malloc(bytes);
+    float *h_B = (float*)malloc(bytes);
+    float *h_C = (float*)malloc(bytes);
 
-    if (!A || !B || !C) {
-        fprintf(stderr, "Host allocation failed\n");
-        free(A);
-        free(B);
-        free(C);
-        return 1;
-    }
+    for (int i = 0; i < N; i++) { h_A[i] = 1.0f; h_B[i] = 2.0f; }
 
-    for (long i = 0; i < N; i++) {
-        A[i] = 1.0f + 0.001f * (float)(i % 1000);
-        B[i] = 2.0f + 0.002f * (float)(i % 1000);
-    }
+    // ── GPU(device) 메모리 할당 ─────────────────────────────
+    float *d_A, *d_B, *d_C;
+    cudaMalloc(&d_A, bytes);
+    cudaMalloc(&d_B, bytes);
+    cudaMalloc(&d_C, bytes);
 
-    CUDA_CHECK(cudaMalloc((void**)&d_A, bytes));
-    CUDA_CHECK(cudaMalloc((void**)&d_B, bytes));
-    CUDA_CHECK(cudaMalloc((void**)&d_C, bytes));
+    // ── CPU → GPU 복사 ──────────────────────────────────────
+    cudaMemcpy(d_A, h_A, bytes, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_B, h_B, bytes, cudaMemcpyHostToDevice);
 
-    cudaEvent_t start_total, stop_total, start_kernel, stop_kernel;
-    CUDA_CHECK(cudaEventCreate(&start_total));
-    CUDA_CHECK(cudaEventCreate(&stop_total));
-    CUDA_CHECK(cudaEventCreate(&start_kernel));
-    CUDA_CHECK(cudaEventCreate(&stop_kernel));
+    // ── kernel 실행 ─────────────────────────────────────────
+    int block = 256;                        // 블록당 thread 수
+    int grid  = (N + block - 1) / block;   // 필요한 블록 수
 
-    int block = 256;
-    int grid = (int)((N + block - 1) / block);
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    cudaEventRecord(start);
 
-    CUDA_CHECK(cudaEventRecord(start_total));
-    CUDA_CHECK(cudaMemcpy(d_A, A, bytes, cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(d_B, B, bytes, cudaMemcpyHostToDevice));
+    vec_add_kernel<<<grid, block>>>(d_A, d_B, d_C, N);   // ← kernel 호출
 
-    CUDA_CHECK(cudaEventRecord(start_kernel));
-    vec_add_kernel<<<grid, block>>>(d_A, d_B, d_C, N);
-    CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaEventRecord(stop_kernel));
-    CUDA_CHECK(cudaEventSynchronize(stop_kernel));
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);            // GPU 작업 완료 대기
 
-    CUDA_CHECK(cudaMemcpy(C, d_C, bytes, cudaMemcpyDeviceToHost));
-    CUDA_CHECK(cudaEventRecord(stop_total));
-    CUDA_CHECK(cudaEventSynchronize(stop_total));
+    float ms = 0;
+    cudaEventElapsedTime(&ms, start, stop);
 
-    float kernel_ms = 0.0f, total_ms = 0.0f;
-    CUDA_CHECK(cudaEventElapsedTime(&kernel_ms, start_kernel, stop_kernel));
-    CUDA_CHECK(cudaEventElapsedTime(&total_ms, start_total, stop_total));
+    // ── GPU → CPU 복사 ──────────────────────────────────────
+    cudaMemcpy(h_C, d_C, bytes, cudaMemcpyDeviceToHost);
 
-    double checksum = 0.0;
-    long stride = (N / 16 > 0) ? (N / 16) : 1;
-    for (long i = 0; i < N; i += stride) {
-        checksum += C[i];
-    }
+    printf("[cuda]    N=%d  kernel=%.4f s  C[0]=%.1f\n", N, ms / 1000.0f, h_C[0]);
 
-    printf("[cuda vec_add kernel] N=%ld time=%.6f s checksum=%.6f\n", N, kernel_ms / 1000.0, checksum);
-    printf("[cuda vec_add total ] N=%ld time=%.6f s checksum=%.6f\n", N, total_ms / 1000.0, checksum);
-
-    CUDA_CHECK(cudaEventDestroy(start_total));
-    CUDA_CHECK(cudaEventDestroy(stop_total));
-    CUDA_CHECK(cudaEventDestroy(start_kernel));
-    CUDA_CHECK(cudaEventDestroy(stop_kernel));
-    CUDA_CHECK(cudaFree(d_A));
-    CUDA_CHECK(cudaFree(d_B));
-    CUDA_CHECK(cudaFree(d_C));
-    free(A);
-    free(B);
-    free(C);
+    // ── 메모리 해제 ─────────────────────────────────────────
+    cudaFree(d_A); cudaFree(d_B); cudaFree(d_C);
+    free(h_A); free(h_B); free(h_C);
     return 0;
 }

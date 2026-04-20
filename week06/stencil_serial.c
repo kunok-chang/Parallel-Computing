@@ -1,75 +1,52 @@
+// ============================================================
+// 2D Stencil (5-point Jacobi) - Serial
+// 핵심: 격자(grid)의 각 점을 상하좌우 이웃의 평균으로 갱신
+//       이 반복 계산이 많을수록 병렬화 효과가 커짐
+// ============================================================
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
-static double now_sec(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ts.tv_sec + ts.tv_nsec * 1e-9;
+#define NX    2048   // 격자 행 수
+#define NY    2048   // 격자 열 수
+#define ITER  200    // 반복 횟수
+
+static void init(float *a) {
+    for (int i = 0; i < NX; i++)
+        for (int j = 0; j < NY; j++)
+            a[i * NY + j] = (i == 0 || j == 0 || i == NX-1 || j == NY-1)
+                             ? 1.0f : 0.0f;   // 경계는 1, 내부는 0
 }
 
-static void initialize(float* a, int Nx, int Ny) {
-    for (int i = 0; i < Nx; i++) {
-        for (int j = 0; j < Ny; j++) {
-            if (i == 0 || j == 0 || i == Nx - 1 || j == Ny - 1) {
-                a[(size_t)i * Ny + j] = 1.0f;
-            } else {
-                a[(size_t)i * Ny + j] = (float)((i + j) & 15) * 0.001f;
-            }
-        }
-    }
-}
+int main(void) {
+    float *old = malloc(NX * NY * sizeof(float));
+    float *nw  = malloc(NX * NY * sizeof(float));
 
-int main(int argc, char** argv) {
-    int Nx = 4096, Ny = 4096, iters = 400;
-    if (argc > 1) Nx = atoi(argv[1]);
-    if (argc > 2) Ny = atoi(argv[2]);
-    if (argc > 3) iters = atoi(argv[3]);
+    init(old);
+    memcpy(nw, old, NX * NY * sizeof(float));
 
-    size_t n = (size_t)Nx * Ny;
-    size_t bytes = n * sizeof(float);
-    float* oldA = (float*)malloc(bytes);
-    float* newA = (float*)malloc(bytes);
-    if (!oldA || !newA) {
-        fprintf(stderr, "Allocation failed\n");
-        free(oldA);
-        free(newA);
-        return 1;
+    // ── 핵심 계산 ──────────────────────────────────────────
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+
+    for (int step = 0; step < ITER; step++) {
+        for (int i = 1; i < NX - 1; i++)
+            for (int j = 1; j < NY - 1; j++)
+                nw[i*NY+j] = 0.2f * (old[i*NY+j]
+                            + old[(i-1)*NY+j] + old[(i+1)*NY+j]  // 상, 하
+                            + old[i*NY+(j-1)] + old[i*NY+(j+1)]); // 좌, 우
+
+        float *tmp = old; old = nw; nw = tmp;  // 포인터 스왑 (memcpy 없이)
     }
 
-    initialize(oldA, Nx, Ny);
-    memcpy(newA, oldA, bytes);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    // ───────────────────────────────────────────────────────
 
-    double t0 = now_sec();
-    for (int step = 0; step < iters; step++) {
-        for (int i = 1; i < Nx - 1; i++) {
-            size_t row = (size_t)i * Ny;
-            size_t row_up = row - Ny;
-            size_t row_dn = row + Ny;
-            for (int j = 1; j < Ny - 1; j++) {
-                newA[row + j] = 0.2f * (
-                    oldA[row + j] +
-                    oldA[row_up + j] + oldA[row_dn + j] +
-                    oldA[row + j - 1] + oldA[row + j + 1]);
-            }
-        }
-        float* tmp = oldA;
-        oldA = newA;
-        newA = tmp;
-    }
-    double t1 = now_sec();
+    double sec = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) * 1e-9;
+    printf("[serial]  %dx%d  iters=%d  time=%.4f s  center=%.6f\n",
+           NX, NY, ITER, sec, old[(NX/2)*NY + NY/2]);
 
-    double checksum = 0.0;
-    size_t stride = (n / 32 > 0) ? (n / 32) : 1;
-    for (size_t i = 0; i < n; i += stride) {
-        checksum += oldA[i];
-    }
-
-    printf("[serial stencil] Nx=%d Ny=%d iters=%d time=%.6f s checksum=%.6f\n",
-           Nx, Ny, iters, t1 - t0, checksum);
-
-    free(oldA);
-    free(newA);
+    free(old); free(nw);
     return 0;
 }
