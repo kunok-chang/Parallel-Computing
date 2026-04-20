@@ -1,12 +1,5 @@
 # CUDA Introduction: simple vec_add + performance-friendly stencil
 
-이 버전은 목적을 두 가지로 분리했습니다.
-
-1. `vec_add_*` 는 **성능보다 구조 비교용**으로 유지
-   - serial / OpenMP / CUDA 문법과 실행 흐름을 처음 비교하는 아주 단순한 벡터 덧셈
-2. `stencil_*` 는 **성능 비교용**으로 구성
-   - 기본적으로 `serial < openmp < cuda`가 나오기 쉽도록 충분히 큰 2D Jacobi stencil 계산으로 구성
-
 ## Files
 
 - `vec_add_cpu.c` : serial vector addition
@@ -94,14 +87,3 @@ export OMP_NUM_THREADS=8
 ./stencil_openmp 4096 4096 800
 ./stencil_cuda 4096 4096 800
 ```
-
-## Expected classroom message
-
-- `vec_add_*` : “코드 구조 비교용”
-- `stencil_*` : “실제 성능 비교용”
-
-즉 수업에서는
-- vector add로 CUDA 기본 문법 소개
-- stencil로 실제 병렬 성능 비교
-
-순서로 설명하면 자연스럽습니다.
